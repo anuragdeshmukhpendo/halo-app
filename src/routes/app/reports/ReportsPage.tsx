@@ -37,8 +37,9 @@
  * Phase 3 D-01 placeholder convention forbids router edits at phase boundaries.
  */
 
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { Stack, Group, Title } from '@mantine/core'
+import { useDebouncedValue } from '@mantine/hooks'
 import { IconDownload } from '@tabler/icons-react'
 import dayjs from 'dayjs'
 import { Button } from '../../../ui/primitives'
@@ -105,6 +106,28 @@ export function ReportsPage(): React.JSX.Element {
       })
       .sort((a, b) => dayjs(b.createdAt).valueOf() - dayjs(a.createdAt).valueOf())
   }, [allTasks, dateRange, assignee, statusFilter])
+
+  // Debounced filter tracking — fire after filter state settles (300ms) to
+  // avoid noise from rapid filter changes. Skip the initial mount.
+  const [debouncedAssignee] = useDebouncedValue(assignee, 300)
+  const [debouncedStatusFilter] = useDebouncedValue(statusFilter, 300)
+  const [debouncedDateRange] = useDebouncedValue(dateRange, 300)
+  const isInitialMount = useRef(true)
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      return
+    }
+    if (typeof pendo !== 'undefined') {
+      pendo.track('report_filters_applied', {
+        dateRangeStart: debouncedDateRange[0]?.toISOString() ?? '',
+        dateRangeEnd: debouncedDateRange[1]?.toISOString() ?? '',
+        assigneeFilter: debouncedAssignee,
+        statusFilters: debouncedStatusFilter.join(', '),
+        filteredTaskCount: filteredTasks.length,
+      })
+    }
+  }, [debouncedDateRange, debouncedAssignee, debouncedStatusFilter])
 
   // Defensive narrowing — RequireAuth already gates this path.
   if (!workspaceId || !visitor) return <></>
