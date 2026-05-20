@@ -35,8 +35,9 @@
  * boundaries.
  */
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { Stack, Group, Title } from '@mantine/core'
+import { useDebouncedValue } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import { IconPlus, IconTrash } from '@tabler/icons-react'
 import { Button } from '../../../ui/primitives'
@@ -86,6 +87,28 @@ export function ListsPage(): React.JSX.Element {
       ),
     [allTasks, statusFilter, priorityFilter, assigneeFilter],
   )
+
+  // Debounced filter tracking — fire after filter state settles (300ms) to
+  // avoid noise from rapid filter changes. Skip the initial mount.
+  const [debouncedStatus] = useDebouncedValue(statusFilter, 300)
+  const [debouncedPriority] = useDebouncedValue(priorityFilter, 300)
+  const [debouncedAssignee] = useDebouncedValue(assigneeFilter, 300)
+  const isInitialFilterMount = useRef(true)
+  useEffect(() => {
+    if (isInitialFilterMount.current) {
+      isInitialFilterMount.current = false
+      return
+    }
+    if (typeof pendo !== 'undefined') {
+      pendo.track('task_list_filtered', {
+        statusFilter: debouncedStatus,
+        priorityFilter: debouncedPriority,
+        assigneeFilter: debouncedAssignee,
+        filteredTaskCount: filteredTasks.length,
+        totalTaskCount: allTasks.length,
+      })
+    }
+  }, [debouncedStatus, debouncedPriority, debouncedAssignee])
 
   const filtersActive =
     statusFilter !== 'all' || priorityFilter !== 'all' || assigneeFilter !== 'all'
