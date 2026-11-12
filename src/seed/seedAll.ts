@@ -39,6 +39,8 @@ import { K, readWithSchema, writeJSON, MetaSchema, APP_VERSION, SCHEMA_VERSION }
 import type { Meta } from '../storage'
 import { seedTeammatesIfNeeded } from '../team/teamSeed'
 import { seedIfNeeded as seedTasksIfNeeded } from '../tasks/tasksSeed'
+import { TasksArraySchema } from '../tasks/schemas'
+import { TeammatesArraySchema } from '../team/schemas'
 
 // ---------------------------------------------------------------------------
 // Default meta constant (mirrors tasksSeed.ts + teamSeed.ts shape)
@@ -49,6 +51,12 @@ const DEFAULT_META: Meta = {
   seededAt: null,
   appVersion: APP_VERSION,
 }
+
+// Module-level guard for the 'Demo data seeded' Pendo track event. The primary
+// once-only guard is the persisted meta.seededDomains ledger (the event only
+// fires on a call that actually seeded a domain); this Set additionally
+// prevents a re-fire within the same browser session if the meta write fails.
+const trackedSeededWorkspaces = new Set<string>()
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -93,18 +101,23 @@ export function seedDemoData(workspaceId: string): void {
       : meta.seededAt !== null
         ? { tasks: meta.seededAt }
         : {}
+  const isLegacyUpgrade = meta.seededDomains == null && meta.seededAt !== null
 
   // Step 2 (D-04 ordering): teammates BEFORE tasks. tasksSeed reads
   // K.teammates and maps Teammate → Assignee for the assignee field.
+  let teammatesSeeded = false
   if (!effectiveDomains.teammates) {
     seedTeammatesIfNeeded(workspaceId)
     effectiveDomains.teammates = new Date().toISOString()
+    teammatesSeeded = true
   }
 
   // Step 3: tasks — picks assignees from the just-written teammates.
+  let tasksSeeded = false
   if (!effectiveDomains.tasks) {
     seedTasksIfNeeded(workspaceId)
     effectiveDomains.tasks = new Date().toISOString()
+    tasksSeeded = true
   }
 
   // Step 4: Persist the merged meta record. Preserve the legacy seededAt
@@ -114,4 +127,28 @@ export function seedDemoData(workspaceId: string): void {
   const newSeededAt =
     meta.seededAt ?? effectiveDomains.teammates ?? effectiveDomains.tasks ?? null
   writeJSON(K.meta(), { ...meta, seededAt: newSeededAt, seededDomains: effectiveDomains })
+
+  // Step 5: Pendo track event — fires only on the call that actually seeded
+  // at least one domain (first workspace load, or legacy upgrade). Subsequent
+  // calls see the persisted ledger and skip both seeders, so this stays silent.
+  if (
+    (teammatesSeeded || tasksSeeded) &&
+    !trackedSeededWorkspaces.has(workspaceId) &&
+    typeof pendo !== 'undefined'
+  ) {
+    trackedSeededWorkspaces.add(workspaceId)
+    try {
+      pendo.track('Demo data seeded', {
+        workspaceId,
+        teammatesSeeded,
+        tasksSeeded,
+        teammateCount: readWithSchema(K.teammates(workspaceId), TeammatesArraySchema, []).length,
+        taskCount: readWithSchema(K.tasks(workspaceId), TasksArraySchema, []).length,
+        legacyUpgrade: isLegacyUpgrade,
+      })
+    } catch (err) {
+      // Tracking must never break seeding.
+      console.error('[halo:seedAll] pendo.track failed', err)
+    }
+  }
 }
